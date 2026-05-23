@@ -1,11 +1,12 @@
-"""Weighted total PINN loss for the piezoelectric crack problem.
+"""Weighted total PINN loss — driven by problem_definition.ACTIVE_PROBLEM.
 
-Loss = w_PDE  · (‖R₁‖² + ‖R₂‖² + ‖R₃‖²)
-     + w_BC   · (‖BC1‖² + ‖BC2‖² + ‖BC3‖² + ‖BC4‖²
-                 + ‖BC5_τ₁₃‖² + ‖BC5_τ₃₃‖² + ‖BC5_D₃‖²)
-     + w_FAR  · (‖u₁^far‖² + ‖u₃^far‖² + ‖φ^far‖²)
+Loss = w_pde · Σ‖Rᵢ‖²                    (PDE residuals)
+     + Σ bc.weight · ‖BCⱼ‖²              (boundary conditions, per-BC weights)
+     + w_ic  · Σ ic.weight · ‖ICₖ‖²     (initial conditions, optional)
 
-All squared norms are mean-squared values.
+The governing equations, boundary conditions, and initial conditions are
+read entirely from  src/problem_definition.py  — no other file needs to
+change when switching problems.
 """
 
 from __future__ import annotations
@@ -14,15 +15,6 @@ import torch
 from torch import Tensor
 
 from . import config as cfg
-from .pde_residuals import pde_residuals
-from .boundary_conditions import (
-    bc1_crack_normal_stress,
-    bc2_non_crack_displacement,
-    bc3_left_shear_stress,
-    bc4_left_D1,
-    bc5_top_bottom,
-    bc_far_field,
-)
 
 
 def _mse(r: Tensor) -> Tensor:
@@ -31,81 +23,87 @@ def _mse(r: Tensor) -> Tensor:
 
 def pinn_loss(
     net,
-    tau0_fn,
-    N_int: int,
-    N_bc: int,
-    device: torch.device,
-    dtype: torch.dtype,
-    w_pde: float = cfg.W_PDE,
-    w_bc:  float = cfg.W_BC,
-    w_far: float = cfg.W_FAR,
+    N_int: int = cfg.N_INTERIOR,
+    N_bc:  int = cfg.N_BOUNDARY,
+    N_ic:  int = cfg.N_IC,
+    device: torch.device | None = None,
+    dtype:  torch.dtype = torch.float64,
+    w_pde:  float = cfg.W_PDE,
+    w_ic:   float = cfg.W_IC,
+    problem=None,
 ) -> tuple[Tensor, dict[str, Tensor]]:
     """Compute total PINN loss and return component dictionary.
 
     Parameters
     ----------
-    net      : MechanicsNet
-    tau0_fn  : callable(x3_arr, t_arr) → τ₀(x₃, t)  (from thermal_loading)
-    N_int    : number of interior collocation points
-    N_bc     : number of points per boundary segment
+    net     : network (callable)
+    N_int   : number of interior (PDE) collocation points
+    N_bc    : number of points per boundary segment
+    N_ic    : number of initial-condition collocation points
     device, dtype : torch device / dtype
-    w_pde, w_bc, w_far : loss weights
+    w_pde   : global PDE loss weight
+    w_ic    : global IC loss weight (ignored when problem has no ICs)
+    problem : ProblemSpec from problem_definition.py;
+              defaults to ACTIVE_PROBLEM when None
 
     Returns
     -------
-    total_loss : scalar Tensor
-    components : dict with individual loss terms (for logging)
+    total_loss : scalar Tensor (with grad)
+    components : dict[str, Tensor] — individual terms (detached) for logging
     """
-    # ── Interior PDE points ──────────────────────────────────────────────────
-    x1_int = torch.rand(N_int, 1, device=device, dtype=dtype,
-                        requires_grad=True) * cfg.L_TRUNC
-    x3_int = torch.rand(N_int, 1, device=device, dtype=dtype,
-                        requires_grad=True) * cfg.H
-    t_int  = torch.rand(N_int, 1, device=device, dtype=dtype) * cfg.T_MAX
+    from .problem_definition import ACTIVE_PROBLEM
+    if problem is None:
+        problem = ACTIVE_PROBLEM
 
-    u1_int, u3_int, phi_int = net(x1_int, x3_int, t_int)
-    R1, R2, R3 = pde_residuals(u1_int, u3_int, phi_int, x1_int, x3_int)
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    loss_pde = _mse(R1) + _mse(R2) + _mse(R3)
+    dom = problem.domain
+    x1_lo, x1_hi = dom.x1_range
+    x3_lo, x3_hi = dom.x3_range
+    t_lo,  t_hi  = dom.t_range if dom.t_range is not None else (0.0, 1.0)
 
-    # ── Boundary conditions ──────────────────────────────────────────────────
-    # BC1
-    r_bc1 = bc1_crack_normal_stress(net, tau0_fn, N_bc, device, dtype)
-    loss_bc1 = _mse(r_bc1)
+    # ── Interior PDE collocation points ──────────────────────────────────────
+    def _sample(lo, hi, N):
+        return (lo + (hi - lo) * torch.rand(N, 1, device=device, dtype=dtype)
+                ).requires_grad_(True)
 
-    # BC2
-    r_bc2 = bc2_non_crack_displacement(net, N_bc, device, dtype)
-    loss_bc2 = _mse(r_bc2)
+    x1_int = _sample(x1_lo, x1_hi, N_int)
+    x3_int = _sample(x3_lo, x3_hi, N_int)
+    t_int  = torch.rand(N_int, 1, device=device, dtype=dtype) * (t_hi - t_lo) + t_lo
 
-    # BC3
-    r_bc3 = bc3_left_shear_stress(net, N_bc, device, dtype)
-    loss_bc3 = _mse(r_bc3)
+    # 2-D problem: (x1, x3) + optional time
+    pde_residuals = problem.pde_fn(net, x1_int, x3_int, t_int)
+    loss_pde = sum(_mse(r) for r in pde_residuals)
 
-    # BC4
-    r_bc4 = bc4_left_D1(net, N_bc, device, dtype)
-    loss_bc4 = _mse(r_bc4)
+    # ── Boundary conditions ───────────────────────────────────────────────────
+    components: dict[str, Tensor] = {}
+    loss_bc_total = torch.zeros(1, device=device, dtype=dtype).squeeze()
 
-    # BC5
-    r_bc5_t13, r_bc5_t33, r_bc5_D3 = bc5_top_bottom(net, N_bc, device, dtype)
-    loss_bc5 = _mse(r_bc5_t13) + _mse(r_bc5_t33) + _mse(r_bc5_D3)
+    for bc in problem.boundary_conditions:
+        r = bc.residual_fn(net, N_bc, device, dtype, **(problem.params or {}))
+        if isinstance(r, (tuple, list)):
+            bc_loss = bc.weight * sum(_mse(ri) for ri in r)
+        else:
+            bc_loss = bc.weight * _mse(r)
+        components[bc.name] = bc_loss.detach()
+        loss_bc_total = loss_bc_total + bc_loss
 
-    loss_bc = loss_bc1 + loss_bc2 + loss_bc3 + loss_bc4 + loss_bc5
+    components["bc_total"] = loss_bc_total.detach()
 
-    # ── Far-field condition ───────────────────────────────────────────────────
-    u1_far, u3_far, phi_far = bc_far_field(net, N_bc, device, dtype)
-    loss_far = _mse(u1_far) + _mse(u3_far) + _mse(phi_far)
+    # ── Initial conditions (optional) ─────────────────────────────────────────
+    loss_ic_total = torch.zeros(1, device=device, dtype=dtype).squeeze()
+    if problem.has_initial_conditions:
+        for ic in problem.initial_conditions:
+            r = ic.residual_fn(net, N_ic, device, dtype, **(problem.params or {}))
+            ic_loss = ic.weight * _mse(r)
+            components[f"ic_{ic.name}"] = ic_loss.detach()
+            loss_ic_total = loss_ic_total + ic_loss
+    components["ic_total"] = loss_ic_total.detach()
 
-    # ── Total ────────────────────────────────────────────────────────────────
-    total = w_pde * loss_pde + w_bc * loss_bc + w_far * loss_far
+    # ── Total ─────────────────────────────────────────────────────────────────
+    total = w_pde * loss_pde + loss_bc_total + w_ic * loss_ic_total
+    components["pde"]   = loss_pde.detach() if isinstance(loss_pde, Tensor) else torch.tensor(loss_pde)
+    components["total"] = total.detach()
 
-    components = {
-        "pde":  loss_pde.detach(),
-        "bc1":  loss_bc1.detach(),
-        "bc2":  loss_bc2.detach(),
-        "bc3":  loss_bc3.detach(),
-        "bc4":  loss_bc4.detach(),
-        "bc5":  loss_bc5.detach(),
-        "far":  loss_far.detach(),
-        "total": total.detach(),
-    }
     return total, components

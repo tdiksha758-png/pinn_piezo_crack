@@ -5,7 +5,12 @@ Phase 2 — L-BFGS          (high-precision fine-tuning)
 
 Usage::
     from src.trainer import Trainer
-    trainer = Trainer(net, tau0_fn)
+    from src.problem_definition import ACTIVE_PROBLEM
+
+    # (optional) inject runtime params before training:
+    ACTIVE_PROBLEM.set_param("tau0_fn", tau0_fn)
+
+    trainer = Trainer(net)
     trainer.train()
     trainer.save("checkpoints/model.pt")
 """
@@ -29,29 +34,28 @@ class Trainer:
     def __init__(
         self,
         net: MechanicsNet,
-        tau0_fn,
         *,
         device: torch.device | None = None,
         dtype: torch.dtype = torch.float64,
         n_interior: int = cfg.N_INTERIOR,
         n_boundary: int = cfg.N_BOUNDARY,
+        n_ic: int = cfg.N_IC,
         lr_adam: float = cfg.LR_ADAM,
         max_iter_adam: int = cfg.MAX_ITER_ADAM,
         max_iter_lbfgs: int = cfg.MAX_ITER_LBFGS,
         log_every: int = 500,
         w_pde: float = cfg.W_PDE,
-        w_bc:  float = cfg.W_BC,
-        w_far: float = cfg.W_FAR,
+        w_ic:  float = cfg.W_IC,
     ) -> None:
         if device is None:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.device = device
         self.dtype  = dtype
         self.net    = net.to(device=device, dtype=dtype)
-        self.tau0_fn = tau0_fn
 
         self.n_int = n_interior
         self.n_bc  = n_boundary
+        self.n_ic  = n_ic
 
         self.lr_adam      = lr_adam
         self.max_adam     = max_iter_adam
@@ -59,18 +63,21 @@ class Trainer:
         self.log_every    = log_every
 
         self.w_pde = w_pde
-        self.w_bc  = w_bc
-        self.w_far = w_far
+        self.w_ic  = w_ic
 
         self.history: list[dict[str, float]] = []
 
     # ── internal loss wrapper ─────────────────────────────────────────────────
     def _loss(self) -> tuple[Tensor, dict[str, Tensor]]:
         return pinn_loss(
-            self.net, self.tau0_fn,
-            self.n_int, self.n_bc,
-            self.device, self.dtype,
-            w_pde=self.w_pde, w_bc=self.w_bc, w_far=self.w_far,
+            self.net,
+            N_int=self.n_int,
+            N_bc=self.n_bc,
+            N_ic=self.n_ic,
+            device=self.device,
+            dtype=self.dtype,
+            w_pde=self.w_pde,
+            w_ic=self.w_ic,
         )
 
     # ── Phase 1: Adam ─────────────────────────────────────────────────────────
@@ -92,8 +99,9 @@ class Trainer:
                 print(
                     f"Adam {step:6d}/{self.max_adam}  "
                     f"loss={row['total']:.3e}  "
-                    f"pde={row['pde']:.3e}  bc={row['bc1']+row['bc2']+row['bc3']+row['bc4']+row['bc5']:.3e}  "
-                    f"far={row['far']:.3e}  "
+                    f"pde={row['pde']:.3e}  "
+                    f"bc={row['bc_total']:.3e}  "
+                    f"ic={row['ic_total']:.3e}  "
                     f"[{elapsed:.1f}s]"
                 )
 

@@ -152,21 +152,24 @@ def plot_loss_history(
 ) -> None:
     """Plot training loss components over iterations."""
     Path(save_dir).mkdir(parents=True, exist_ok=True)
-    keys = ["total", "pde", "bc1", "bc2", "bc3", "bc4", "bc5", "far"]
-    data = {k: [h[k] for h in history if k in h] for k in keys}
+
+    # Collect all keys that appear in the history (problem-agnostic)
+    all_keys = list(dict.fromkeys(k for h in history for k in h))
+    data = {k: [h[k] for h in history if k in h] for k in all_keys}
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
     ax = axes[0]
-    ax.semilogy(data["total"], lw=2, color="k")
+    ax.semilogy(data.get("total", []), lw=2, color="k")
     ax.set_title("Total loss")
     ax.set_xlabel("Iteration");  ax.set_ylabel("Loss")
     ax.grid(True, alpha=0.3)
 
     ax = axes[1]
-    for k in ["pde", "bc1", "bc2", "bc3", "bc4", "bc5", "far"]:
-        if data[k]:
-            ax.semilogy(data[k], label=k, lw=1.5)
+    skip = {"total"}          # already plotted on left panel
+    for k, vals in data.items():
+        if k not in skip and vals:
+            ax.semilogy(vals, label=k, lw=1.5)
     ax.set_title("Loss components")
     ax.set_xlabel("Iteration")
     ax.legend(fontsize=8);  ax.grid(True, alpha=0.3)

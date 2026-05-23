@@ -32,6 +32,7 @@ from src.temperature import solve_temperature
 from src.thermal_loading import compute_AB, compute_tau0_field, make_tau0_interpolator
 from src.network import MechanicsNet
 from src.trainer import Trainer
+from src.problem_definition import ACTIVE_PROBLEM
 from src.postprocess import (
     plot_temperature,
     plot_sif,
@@ -98,12 +99,15 @@ def main() -> None:
     tau0_field    = compute_tau0_field(x3_grid, t_grid, T_field, A, B)
     tau0_fn       = make_tau0_interpolator(x3_grid, t_grid, tau0_field)
 
-    # ── Step 3: PINN training ─────────────────────────────────────────────────
+    # inject the thermal loading function into the active problem
+    ACTIVE_PROBLEM.set_param("tau0_fn", tau0_fn)
+
+    # ── Step 3: PINN training ───────────────────────────────────────────────
     print("[3/4] Constructing PINN …")
     net = MechanicsNet(cfg.MECH_LAYERS)
 
     trainer = Trainer(
-        net, tau0_fn,
+        net,
         device=device, dtype=dtype,
         n_interior=args.n_int,
         n_boundary=args.n_bc,
