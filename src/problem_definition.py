@@ -1,9 +1,132 @@
-# Cleaned Python file
-# Retained only the section corresponding to the equations and boundary conditions
-# provided in the LaTeX file.
+"""Central problem-definition file — THE ONLY FILE YOU NEED TO EDIT
+to switch governing equations, boundary conditions, or initial conditions.
+
+Structure
+---------
+1. Declare the physics via helper dataclasses:
+       BoundaryCondition  — one BC with a residual evaluator
+       InitialCondition   — one IC with a residual evaluator (optional)
+       DomainSpec         — coordinate / time bounds
+       ProblemSpec        — assembles PDE + BCs + ICs into one object
+
+2. Set   ACTIVE_PROBLEM = ProblemSpec(...)   at the bottom.
+
+3. If your problem has no time dimension set  t_range=None  in DomainSpec
+   and leave  initial_conditions=None  in ProblemSpec — both are optional.
+
+Runtime parameters (e.g. a thermal-loading function computed before training)
+can be injected without editing this file:
+    from src.problem_definition import ACTIVE_PROBLEM
+    ACTIVE_PROBLEM.set_param("tau0_fn", my_function)
+
+Residual function signatures
+-----------------------------
+  PDE:   pde_fn(net, x1, x3, t)        -> list[Tensor]
+  BC:    residual_fn(net, N, dev, dt, **params) -> Tensor | tuple[Tensor, ...]
+  IC:    residual_fn(net, N, dev, dt, **params) -> Tensor
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Callable, Optional
+
+import torch
+from torch import Tensor
+
+
+# ── Dataclasses ──────────────────────────────────────────────────────────────
+
+@dataclass
+class BoundaryCondition:
+    """One boundary condition for the PINN.
+
+    Parameters
+    ----------
+    name        : Human-readable label used in loss logs.
+    residual_fn : Callable(net, N, device, dtype, **params) -> Tensor or
+                  tuple[Tensor, ...].  Return a tuple when multiple
+                  sub-conditions share one sampler (e.g. BC5 top+bottom).
+    weight      : Per-BC loss weight multiplier (default 1.0).
+    """
+    name: str
+    residual_fn: Callable
+    weight: float = 1.0
+
+
+@dataclass
+class InitialCondition:
+    """One initial condition for the PINN (optional — omit for steady problems).
+
+    Parameters
+    ----------
+    name        : Human-readable label used in loss logs.
+    residual_fn : Callable(net, N, device, dtype, **params) -> Tensor.
+    weight      : Per-IC loss weight multiplier (default 1.0).
+    """
+    name: str
+    residual_fn: Callable
+    weight: float = 1.0
+
+
+@dataclass
+class DomainSpec:
+    """Coordinate and time bounds for collocation point sampling.
+
+    Set t_range=None for purely spatial (steady / quasi-static) problems.
+    Set y_range for 3-D problems; leave None for 2-D (x, z) problems.
+    """
+    x1_range: tuple[float, float]
+    x3_range: tuple[float, float]
+    t_range:  Optional[tuple[float, float]] = None  # None → time-independent
+    y_range:  Optional[tuple[float, float]] = None  # None → 2-D problem
+
+
+@dataclass
+class ProblemSpec:
+    """Complete PINN problem specification.
+
+    Attributes
+    ----------
+    name                : Human-readable problem name.
+    domain              : DomainSpec — coordinate bounds.
+    pde_fn              : Callable(net, x1, x3, t) -> list[Tensor] of residuals.
+                          Each element is one PDE residual (N,1) tensor.
+    boundary_conditions : Ordered list of BoundaryCondition objects.
+    initial_conditions  : Optional list of InitialCondition objects.
+                          Pass None or [] for time-independent problems.
+    params              : Dict of mutable runtime parameters injected into
+                          residual callables as keyword arguments.
+                          Update via  set_param(key, value).
+    """
+    name:                str
+    domain:              DomainSpec
+    pde_fn:              Callable
+    boundary_conditions: list[BoundaryCondition]
+    initial_conditions:  Optional[list[InitialCondition]] = None
+    params:              dict = field(default_factory=dict)
+
+    def set_param(self, key: str, value) -> None:
+        """Inject / update a runtime parameter without editing this file.
+
+        Example::
+            ACTIVE_PROBLEM.set_param("tau0_fn", thermal_loading_fn)
+        """
+        self.params[key] = value
+
+    @property
+    def has_initial_conditions(self) -> bool:
+        """True when at least one InitialCondition is registered."""
+        return bool(self.initial_conditions)
+
+    @property
+    def is_time_dependent(self) -> bool:
+        """True when the domain includes a time axis."""
+        return self.domain.t_range is not None
+
 
 # =============================================================================
-# TRICLINIC PIEZOELECTRIC INTERFACE PROBLEM — MODAL EXPANSION  (Problem 2)
+# TRICLINIC PIEZOELECTRIC INTERFACE PROBLEM — MODAL EXPANSION
 # Two general triclinic piezoelectric half-spaces coupled at z = 0.
 #
 # Upper half-space (superscript 0): z > 0  —  4 partial-wave modes (nets 0–3)
@@ -24,61 +147,7 @@
 #      That is the ONLY line to change to switch problems.
 # =============================================================================
 
-from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Callable, Sequence
-
-import torch
 import torch.nn as nn
-from torch import Tensor
-
-
-# ── 0. Problem specification dataclasses ────────────────────────────────────
-
-@dataclass
-class DomainSpec:
-    """Spatial-temporal domain specification."""
-    x1_range: tuple[float, float]
-    x3_range: tuple[float, float]
-    t_range: tuple[float, float] | None = None
-
-
-@dataclass
-class BoundaryCondition:
-    """Single boundary condition: name, residual function, and loss weight."""
-    name: str
-    residual_fn: Callable
-    weight: float = 1.0
-
-
-@dataclass
-class InitialCondition:
-    """Single initial condition: name, residual function, and loss weight."""
-    name: str
-    residual_fn: Callable
-    weight: float = 1.0
-
-
-@dataclass
-class ProblemSpec:
-    """Complete problem specification: PDEs, BCs, ICs, domain, parameters."""
-    name: str
-    domain: DomainSpec
-    pde_fn: Callable
-    boundary_conditions: list[BoundaryCondition] | None = None
-    initial_conditions: list[InitialCondition] | None = None
-    params: dict | None = None
-
-    @property
-    def has_initial_conditions(self) -> bool:
-        """Check if problem has initial conditions."""
-        return self.initial_conditions is not None and len(self.initial_conditions) > 0
-
-    @property
-    def is_time_dependent(self) -> bool:
-        """Check if problem is time-dependent (has t_range)."""
-        return self.domain.t_range is not None
 
 
 # ── 1. Material constants ─────────────────────────────────────────────────────
@@ -425,17 +494,7 @@ def _bc_phi_sum(net: MultiModeNet, N: int, device, dtype, **_) -> Tensor:
     outs = [net.nets[i](x, z, t) for i in range(7)]
     return (sum(outs[i][3] for i in MultiModeNet.UPPER_IDX)
             - sum(outs[i][3] for i in MultiModeNet.LOWER_IDX))
-def forward(self, x, z, t):
 
-    outputs = []
-
-    for net in self.nets:
-
-        outputs.append(
-            net(x, z, t)
-        )
-
-    return outputs
 
 # ── 6. Assemble problem 2: triclinic modal expansion (7 partial waves) ─────────
 
@@ -463,96 +522,5 @@ _MULTIMODE_PROBLEM = ProblemSpec(
 )
 
 
-# ── 7. Export active problem ──────────────────────────────────────────────────
-# Change this line to switch between different problem configurations.
-ACTIVE_PROBLEM = _MULTIMODE_PROBLEM
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# GOVERNING EQUATIONS (LATEX DOCUMENTATION)
-# ═════════════════════════════════════════════════════════════════════════════
-#
-# UPPER HALF-SPACE (superscript 0, z > 0):
-#
-# Equation 1 (u₁ momentum):
-#   (C₁₁⁰+P₁₁⁰)∂²u₁/∂x² + 2C₁₅⁰∂²u₁/∂x∂z + (C₅₅⁰+P₃₃⁰)∂²u₁/∂z²
-#   + C₁₆⁰∂²u₂/∂x² + (C₁₄⁰+C₅₆⁰)∂²u₂/∂x∂z + C₅₄⁰∂²u₂/∂z²
-#   + C₁₅⁰∂²u₃/∂x² + (C₁₃⁰+C₅₅⁰)∂²u₃/∂x∂z + C₅₃⁰∂²u₃/∂z²
-#   + e₁₁⁰∂²φ/∂x² + (e₃₁⁰+e₁₅⁰)∂²φ/∂x∂z + e₃₅⁰∂²φ/∂z²
-#   = ρ ∂²u₁/∂t²
-#
-# Equation 2 (u₂ momentum):
-#   C₁₆⁰∂²u₁/∂x² + (C₅₆⁰+C₄₁⁰)∂²u₁/∂x∂z + C₄₅⁰∂²u₁/∂z²
-#   + (C₆₆⁰+P₁₁⁰)∂²u₂/∂x² + 2C₄₆⁰∂²u₂/∂x∂z + (C₄₄⁰+P₃₃⁰)∂²u₂/∂z²
-#   + C₆₅⁰∂²u₃/∂x² + (C₆₃⁰+C₄₅⁰)∂²u₃/∂x∂z + C₄₃⁰∂²u₃/∂z²
-#   + e₁₆⁰∂²φ/∂x² + (e₃₆⁰+e₁₄⁰)∂²φ/∂x∂z + e₃₄⁰∂²φ/∂z²
-#   = ρ ∂²u₂/∂t²
-#
-# Equation 3 (u₃ momentum):
-#   C₁₅⁰∂²u₁/∂x² + (C₅₅⁰+C₃₁⁰)∂²u₁/∂x∂z + C₃₅⁰∂²u₁/∂z²
-#   + C₅₆⁰∂²u₂/∂x² + (C₅₄⁰+C₃₆⁰)∂²u₂/∂x∂z + C₃₄⁰∂²u₂/∂z²
-#   + (C₅₅⁰+P₁₁⁰)∂²u₃/∂x² + 2C₅₃⁰∂²u₃/∂x∂z + (C₃₃⁰+P₃₃⁰)∂²u₃/∂z²
-#   + e₁₅⁰∂²φ/∂x² + (e₃₅⁰+e₃₁⁰)∂²φ/∂x∂z + e₃₃⁰∂²φ/∂z²
-#   = ρ ∂²u₃/∂t²
-#
-# Equation 4 (Gauss law, quasi-static electric field):
-#   e₁₁⁰∂²u₁/∂x² + (e₁₅⁰+e₃₁⁰)∂²u₁/∂x∂z + e₃₅⁰∂²u₁/∂z²
-#   + e₁₆⁰∂²u₂/∂x² + (e₁₄⁰+e₃₆⁰)∂²u₂/∂x∂z + e₃₄⁰∂²u₂/∂z²
-#   + e₁₅⁰∂²u₃/∂x² + (e₁₃⁰+e₃₅⁰)∂²u₃/∂x∂z + e₃₃⁰∂²u₃/∂z²
-#   - ε₁₁⁰∂²φ/∂x² - ε₃₃⁰∂²φ/∂z² = 0
-#
-#
-# LOWER HALF-SPACE (superscript ′, z < 0):
-#
-# Equation 5 (u₁ momentum):
-#   (C₁₁′+P₁₁′)∂²u₁/∂x² + 2C₁₅′∂²u₁/∂x∂z + (C₅₅′+P₃₃′)∂²u₁/∂z²
-#   + C₁₆′∂²u₂/∂x² + (C₁₄′+C₅₆′)∂²u₂/∂x∂z + C₅₄′∂²u₂/∂z²
-#   + C₁₅′∂²u₃/∂x² + (C₁₃′+C₅₅′)∂²u₃/∂x∂z + C₅₃′∂²u₃/∂z²
-#   + e₁₁′∂²φ/∂x² + (e₃₁′+e₁₅′)∂²φ/∂x∂z + e₃₅′∂²φ/∂z²
-#   = ρ′ ∂²u₁/∂t²
-#
-# Equation 6 (u₂ momentum):
-#   C₁₆′∂²u₁/∂x² + (C₅₆′+C₄₁′)∂²u₁/∂x∂z + C₄₅′∂²u₁/∂z²
-#   + (C₆₆′+P₁₁′)∂²u₂/∂x² + 2C₄₆′∂²u₂/∂x∂z + (C₄₄′+P₃₃′)∂²u₂/∂z²
-#   + C₆₅′∂²u₃/∂x² + (C₆₃′+C₄₅′)∂²u₃/∂x∂z + C₄₃′∂²u₃/∂z²
-#   + e₁₆′∂²φ/∂x² + (e₃₆′+e₁₄′)∂²φ/∂x∂z + e₃₄′∂²φ/∂z²
-#   = ρ′ ∂²u₂/∂t²
-#
-# Equation 7 (u₃ momentum):
-#   C₁₅′∂²u₁/∂x² + (C₅₅′+C₃₁′)∂²u₁/∂x∂z + C₃₅′∂²u₁/∂z²
-#   + C₅₆′∂²u₂/∂x² + (C₅₄′+C₃₆′)∂²u₂/∂x∂z + C₃₄′∂²u₂/∂z²
-#   + (C₅₅′+P₁₁′)∂²u₃/∂x² + 2C₅₃′∂²u₃/∂x∂z + (C₃₃′+P₃₃′)∂²u₃/∂z²
-#   + e₁₅′∂²φ/∂x² + (e₃₅′+e₃₁′)∂²φ/∂x∂z + e₃₃′∂²φ/∂z²
-#   = ρ′ ∂²u₃/∂t²
-#
-# Equation 8 (Gauss law, quasi-static electric field):
-#   e₁₁′∂²u₁/∂x² + (e₁₅′+e₃₁′)∂²u₁/∂x∂z + e₃₅′∂²u₁/∂z²
-#   + e₁₆′∂²u₂/∂x² + (e₁₄′+e₃₆′)∂²u₂/∂x∂z + e₃₄′∂²u₂/∂z²
-#   + e₁₅′∂²u₃/∂x² + (e₁₃′+e₃₅′)∂²u₃/∂x∂z + e₃₃′∂²u₃/∂z²
-#   - ε₁₁′∂²φ/∂x² - ε₃₃′∂²φ/∂z² = 0
-#
-# ═════════════════════════════════════════════════════════════════════════════
-# BOUNDARY CONDITIONS AT INTERFACE (z = 0)
-# ═════════════════════════════════════════════════════════════════════════════
-#
-# BC1 (Displacement continuity u₁):
-#   u₁⁽⁰⁾ + u₁⁽¹⁾ + u₁⁽²⁾ + u₁⁽³⁾ = u₁⁽⁴⁾ + u₁⁽⁵⁾ + u₁⁽⁶⁾
-#
-# BC2 (Displacement continuity u₂):
-#   u₂⁽⁰⁾ + u₂⁽¹⁾ + u₂⁽²⁾ + u₂⁽³⁾ = u₂⁽⁴⁾ + u₂⁽⁵⁾ + u₂⁽⁶⁾
-#
-# BC3 (Displacement continuity u₃):
-#   u₃⁽⁰⁾ + u₃⁽¹⁾ + u₃⁽²⁾ + u₃⁽³⁾ = u₃⁽⁴⁾ + u₃⁽⁵⁾ + u₃⁽⁶⁾
-#
-# BC4 (Stress continuity T₃₁):
-#   T₃₁⁽⁰⁾ + T₃₁⁽¹⁾ + T₃₁⁽²⁾ + T₃₁⁽³⁾ = T₃₁⁽⁴⁾ + T₃₁⁽⁵⁾ + T₃₁⁽⁶⁾
-#
-# BC5 (Stress continuity T₃₂):
-#   T₃₂⁽⁰⁾ + T₃₂⁽¹⁾ + T₃₂⁽²⁾ + T₃₂⁽³⁾ = T₃₂⁽⁴⁾ + T₃₂⁽⁵⁾ + T₃₂⁽⁶⁾
-#
-# BC6 (Electric potential continuity φ):
-#   φ⁽⁰⁾ + φ⁽¹⁾ + φ⁽²⁾ + φ⁽³⁾ = φ⁽⁴⁾ + φ⁽⁵⁾ + φ⁽⁶⁾
-#
-# ═════════════════════════════════════════════════════════════════════════════
-
-
+# ── Active Problem ─────────────────────────────────────────────────────────────
+ACTIVE_PROBLEM = _MULTIMODE_PROBLEM     # ← triclinic modal expansion (7 waves, 28 PDEs)

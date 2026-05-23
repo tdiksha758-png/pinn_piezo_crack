@@ -72,8 +72,12 @@ def pinn_loss(
     x3_int = _sample(x3_lo, x3_hi, N_int)
     t_int  = torch.rand(N_int, 1, device=device, dtype=dtype) * (t_hi - t_lo) + t_lo
 
-    # 2-D problem: (x1, x3) + optional time
-    pde_residuals = problem.pde_fn(net, x1_int, x3_int, t_int)
+    if dom.y_range is not None:                          # 3-D problem
+        y_lo, y_hi = dom.y_range
+        y_int = _sample(y_lo, y_hi, N_int)
+        pde_residuals = problem.pde_fn(net, x1_int, y_int, x3_int, t_int)
+    else:                                                # 2-D problem (default)
+        pde_residuals = problem.pde_fn(net, x1_int, x3_int, t_int)
     loss_pde = sum(_mse(r) for r in pde_residuals)
 
     # ── Boundary conditions ───────────────────────────────────────────────────
@@ -81,7 +85,7 @@ def pinn_loss(
     loss_bc_total = torch.zeros(1, device=device, dtype=dtype).squeeze()
 
     for bc in problem.boundary_conditions:
-        r = bc.residual_fn(net, N_bc, device, dtype, **(problem.params or {}))
+        r = bc.residual_fn(net, N_bc, device, dtype, **problem.params)
         if isinstance(r, (tuple, list)):
             bc_loss = bc.weight * sum(_mse(ri) for ri in r)
         else:
@@ -95,7 +99,7 @@ def pinn_loss(
     loss_ic_total = torch.zeros(1, device=device, dtype=dtype).squeeze()
     if problem.has_initial_conditions:
         for ic in problem.initial_conditions:
-            r = ic.residual_fn(net, N_ic, device, dtype, **(problem.params or {}))
+            r = ic.residual_fn(net, N_ic, device, dtype, **problem.params)
             ic_loss = ic.weight * _mse(r)
             components[f"ic_{ic.name}"] = ic_loss.detach()
             loss_ic_total = loss_ic_total + ic_loss

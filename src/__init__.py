@@ -1,1 +1,1 @@
-# src package for PZT-4 PINN solver
+# src package — Triclinic Piezoelectric Interface PINN solver

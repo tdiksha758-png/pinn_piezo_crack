@@ -25,15 +25,14 @@ from torch import Tensor
 
 from . import config as cfg
 from .loss import pinn_loss
-from .network import MechanicsNet
 
 
 class Trainer:
-    """Manages Adam + L-BFGS training for MechanicsNet."""
+    """Manages Adam + L-BFGS training for the PINN."""
 
     def __init__(
         self,
-        net: MechanicsNet,
+        net,
         *,
         device: torch.device | None = None,
         dtype: torch.dtype = torch.float64,
