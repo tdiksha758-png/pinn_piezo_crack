@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 import torch
+import math
 from torch import Tensor
 
 from . import config as cfg
@@ -38,10 +39,10 @@ class Trainer:
         lr_adam: float = cfg.LR_ADAM,
         max_iter_adam: int = cfg.MAX_ITER_ADAM,
         max_iter_lbfgs: int = cfg.MAX_ITER_LBFGS,
-        log_every: int = 500,
+        log_every: int = 10,
         w_pde: float = cfg.W_PDE,
         w_bc:  float = cfg.W_BC,
-        w_far: float = cfg.W_FAR,
+        
     ) -> None:
         if device is None:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -60,7 +61,7 @@ class Trainer:
 
         self.w_pde = w_pde
         self.w_bc  = w_bc
-        self.w_far = w_far
+        # self.w_far = w_far
 
         self.history: list[dict[str, float]] = []
 
@@ -70,7 +71,7 @@ class Trainer:
             self.net, self.tau0_fn,
             self.n_int, self.n_bc,
             self.device, self.dtype,
-            w_pde=self.w_pde, w_bc=self.w_bc, w_far=self.w_far,
+            w_pde=self.w_pde, w_bc=self.w_bc, 
         )
 
     # ── Phase 1: Adam ─────────────────────────────────────────────────────────
@@ -82,19 +83,67 @@ class Trainer:
             optimiser.zero_grad()
             loss, comps = self._loss()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(
+            self.net.parameters(),
+            max_norm=1.0
+        )
+
+            # --- Diagnostics: gradient & parameter norms ---
+            grad_norm_sq = 0.0
+            param_norm_sq = 0.0
+            for p in self.net.parameters():
+                if p.grad is not None:
+                    try:
+                        gnorm = float(p.grad.detach().norm().item())
+                    except Exception:
+                        gnorm = float(torch.norm(p.grad.detach()).cpu().item())
+                    grad_norm_sq += gnorm * gnorm
+                try:
+                    pnorm = float(p.detach().norm().item())
+                except Exception:
+                    pnorm = float(torch.norm(p.detach()).cpu().item())
+                param_norm_sq += pnorm * pnorm
+
+            grad_norm = math.sqrt(grad_norm_sq)
+            param_norm = math.sqrt(param_norm_sq)
+
+            # Early detect non-finite / exploding gradients
+            if not math.isfinite(grad_norm) or not math.isfinite(float(loss)):
+                print(f"Non-finite detected at step {step}: loss={float(loss)}, grad_norm={grad_norm}")
+                return
+
             optimiser.step()
 
             row = {k: float(v) for k, v in comps.items()}
+            row["grad_norm"] = grad_norm
+            row["param_norm"] = param_norm
             self.history.append(row)
 
             if step % self.log_every == 0:
+
                 elapsed = time.perf_counter() - t0
+
                 print(
-                    f"Adam {step:6d}/{self.max_adam}  "
-                    f"loss={row['total']:.3e}  "
-                    f"pde={row['pde']:.3e}  bc={row['bc1']+row['bc2']+row['bc3']+row['bc4']+row['bc5']:.3e}  "
-                    f"far={row['far']:.3e}  "
-                    f"[{elapsed:.1f}s]"
+                    f"\nEpoch : {step}/{self.max_adam}"
+                    f"\nTotal Loss : {row['total']:.6e}"
+
+                    f"\n\n--- PDE ---"
+                    f"\nPDE Loss   : {row['pde']:.6e}"
+
+                    f"\n\n--- Boundary Losses ---"
+                    f"\nBC1 : {row['bc1']:.6e}"
+                    f"\nBC2 : {row['bc2']:.6e}"
+                    f"\nBC3 : {row['bc3']:.6e}"
+                    f"\nBC4 : {row['bc4']:.6e}"
+                    f"\nBC5 : {row['bc5']:.6e}"
+
+                    f"\n\nBC Total   : "
+                    f"{(row['bc1']+row['bc2']+row['bc3']+row['bc4']+row['bc5']):.6e}"
+
+                    f"\n\n--- Other ---"
+                    f"\nGrad Norm  : {row['grad_norm']:.6e}"
+                    f"\nParam Norm : {row['param_norm']:.6e}"
+                    f"\nElapsed    : {elapsed:.1f} s\n"
                 )
 
     # ── Phase 2: L-BFGS ──────────────────────────────────────────────────────
@@ -158,3 +207,6 @@ class Trainer:
         if "history" in ckpt:
             self.history = ckpt["history"]
         print(f"Checkpoint loaded ← {path}")
+    
+
+    

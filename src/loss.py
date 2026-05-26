@@ -21,7 +21,7 @@ from .boundary_conditions import (
     bc3_left_shear_stress,
     bc4_left_D1,
     bc5_top_bottom,
-    bc_far_field,
+    # bc_far_field,
 )
 
 
@@ -38,7 +38,7 @@ def pinn_loss(
     dtype: torch.dtype,
     w_pde: float = cfg.W_PDE,
     w_bc:  float = cfg.W_BC,
-    w_far: float = cfg.W_FAR,
+    # w_far: float = cfg.W_FAR,
 ) -> tuple[Tensor, dict[str, Tensor]]:
     """Compute total PINN loss and return component dictionary.
 
@@ -61,7 +61,12 @@ def pinn_loss(
                         requires_grad=True) * cfg.L_TRUNC
     x3_int = torch.rand(N_int, 1, device=device, dtype=dtype,
                         requires_grad=True) * cfg.H
-    t_int  = torch.rand(N_int, 1, device=device, dtype=dtype) * cfg.T_MAX
+    t_int = torch.rand(
+    N_int, 1,
+    device=device,
+    dtype=dtype,
+    requires_grad=True
+) * cfg.T_MAX
 
     u1_int, u3_int, phi_int = net(x1_int, x3_int, t_int)
     R1, R2, R3 = pde_residuals(u1_int, u3_int, phi_int, x1_int, x3_int)
@@ -91,13 +96,12 @@ def pinn_loss(
 
     loss_bc = loss_bc1 + loss_bc2 + loss_bc3 + loss_bc4 + loss_bc5
 
-    # ── Far-field condition ───────────────────────────────────────────────────
-    u1_far, u3_far, phi_far = bc_far_field(net, N_bc, device, dtype)
-    loss_far = _mse(u1_far) + _mse(u3_far) + _mse(phi_far)
+    # # ── Far-field condition ───────────────────────────────────────────────────
+    # u1_far, u3_far, phi_far = bc_far_field(net, N_bc, device, dtype)
+    # loss_far = _mse(u1_far) + _mse(u3_far) + _mse(phi_far)
 
     # ── Total ────────────────────────────────────────────────────────────────
-    total = w_pde * loss_pde + w_bc * loss_bc + w_far * loss_far
-
+    total = w_pde * loss_pde + w_bc * loss_bc 
     components = {
         "pde":  loss_pde.detach(),
         "bc1":  loss_bc1.detach(),
@@ -105,7 +109,6 @@ def pinn_loss(
         "bc3":  loss_bc3.detach(),
         "bc4":  loss_bc4.detach(),
         "bc5":  loss_bc5.detach(),
-        "far":  loss_far.detach(),
         "total": total.detach(),
     }
     return total, components

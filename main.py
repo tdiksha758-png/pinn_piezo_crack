@@ -33,6 +33,7 @@ from src.thermal_loading import compute_AB, compute_tau0_field, make_tau0_interp
 from src.network import MechanicsNet
 from src.trainer import Trainer
 from src.postprocess import (
+    plot_tau0_field,
     plot_temperature,
     plot_sif,
     plot_loss_history,
@@ -91,12 +92,38 @@ def main() -> None:
         gamma=args.gamma,
     )
     plot_temperature(x3_grid, t_grid, T_field, save_dir=args.figures)
+    # Compute A(t) and B(t)
+    A, B = compute_AB(x3_grid, T_field)
+
+# Compute τ₀ field
+    tau0_field = compute_tau0_field(
+    x3_grid,
+    t_grid,
+    T_field,
+    A,
+    B,
+)
+
+# Plot τ₀(x₃,F)
+    plot_tau0_field(
+    x3_grid,
+    t_grid,
+    tau0_field,
+)
 
     # ── Step 2: Thermal loading ───────────────────────────────────────────────
     print("[2/4] Computing τ₀(x₃, t), A(t), B(t) …")
     A, B          = compute_AB(x3_grid, T_field)
     tau0_field    = compute_tau0_field(x3_grid, t_grid, T_field, A, B)
     tau0_fn       = make_tau0_interpolator(x3_grid, t_grid, tau0_field)
+
+    # --- Dynamic normalisation: set reference traction from computed field
+    # This scales network outputs to the magnitude of the thermal loading
+    tau0_scale = float(np.max(np.abs(tau0_field))) if tau0_field.size > 0 else cfg.TAU_0_CONST
+    cfg.TAU_0_CONST = tau0_scale
+    cfg.U_REF = cfg.H * cfg.TAU_0_CONST / cfg.MU_11
+    cfg.PHI_REF = abs(cfg.E_15) * cfg.U_REF / cfg.EPS_11 / cfg.H
+    print(f"Dynamic scaling: TAU_0_CONST={cfg.TAU_0_CONST:.3e}, U_REF={cfg.U_REF:.3e}, PHI_REF={cfg.PHI_REF:.3e}")
 
     # ── Step 3: PINN training ─────────────────────────────────────────────────
     print("[3/4] Constructing PINN …")
@@ -121,7 +148,7 @@ def main() -> None:
 
     # ── Step 4: Post-processing ───────────────────────────────────────────────
     print("[4/4] Post-processing …")
-    t_plot = np.array([0.2, 0.5, 1.0, 1.5, 2.0])
+    t_plot = np.linspace(0.1, cfg.T_MAX, 100)
     t_plot = t_plot[t_plot <= cfg.T_MAX]
 
     K_Ia, K_Ib = compute_sif(net, t_plot, device, dtype)

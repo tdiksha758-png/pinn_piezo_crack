@@ -111,7 +111,7 @@ def bc1_crack_normal_stress(
 ) -> Tensor:
     """BC1: τ₁₁(0,x₃,t) + τ₀ + τ₀(x₃,t) = 0   on crack face."""
     x1, x3, t = sample_crack_face(N, device, dtype)
-    _require_grad(x1, x3)
+    _require_grad(x1, x3, t)
 
     u1, u3, phi = net(x1, x3, t)
     d = first_order_derivatives(u1, u3, phi, x1, x3)
@@ -126,9 +126,14 @@ def bc1_crack_normal_stress(
     )
 
     tau0_const = cfg.TAU_0_CONST
-    res = c["tau11"] + tau0_const + tau0_thermal
-    return res
+    stress_ref = cfg.KAPPA_11 * cfg.T0_BC
 
+    res = (
+        c["tau11"]
+        + tau0_const
+        + tau0_thermal
+    ) / stress_ref
+    return res
 
 def bc2_non_crack_displacement(
     net,
@@ -150,13 +155,13 @@ def bc3_left_shear_stress(
 ) -> Tensor:
     """BC3: τ₁₃(0,x₃,t) = 0   on full left face."""
     x1, x3, t = sample_left_face(N, device, dtype)
-    _require_grad(x1, x3)
+    _require_grad(x1, x3, t)
 
     u1, u3, phi = net(x1, x3, t)
     d = first_order_derivatives(u1, u3, phi, x1, x3)
     c = constitutive(d)
-    return c["tau13"]
-
+    stress_ref = cfg.KAPPA_11 * cfg.T0_BC
+    return c["tau13"] / stress_ref
 
 def bc4_left_D1(
     net,
@@ -166,12 +171,14 @@ def bc4_left_D1(
 ) -> Tensor:
     """BC4: D₁(0,x₃,t) = 0   on full left face."""
     x1, x3, t = sample_left_face(N, device, dtype)
-    _require_grad(x1, x3)
+    _require_grad(x1, x3, t)
 
     u1, u3, phi = net(x1, x3, t)
     d = first_order_derivatives(u1, u3, phi, x1, x3)
     c = constitutive(d)
-    return c["D1"]
+    D_ref = cfg.PHI_REF / cfg.H
+    return c["D1"] / D_ref
+   
 
 
 def bc5_top_bottom(
@@ -182,21 +189,28 @@ def bc5_top_bottom(
 ) -> tuple[Tensor, Tensor, Tensor]:
     """BC5: τ₁₃=0, τ₃₃=0, D₃=0   on x₃ ∈ {0, H}."""
     x1, x3, t = sample_top_bottom(N, device, dtype)
-    _require_grad(x1, x3)
+    _require_grad(x1, x3, t)
 
     u1, u3, phi = net(x1, x3, t)
     d = first_order_derivatives(u1, u3, phi, x1, x3)
     c = constitutive(d)
-    return c["tau13"], c["tau33"], c["D3"]
+    stress_ref = cfg.KAPPA_11 * cfg.T0_BC
+    D_ref = cfg.PHI_REF / cfg.H
+
+    return (
+        c["tau13"] / stress_ref,
+        c["tau33"] / stress_ref,
+        c["D3"] / D_ref,
+    )
 
 
-def bc_far_field(
-    net,
-    N: int,
-    device: torch.device,
-    dtype: torch.dtype,
-) -> tuple[Tensor, Tensor, Tensor]:
-    """Far-field condition: u₁, u₃, φ → 0  as  x₁ → L."""
-    x1, x3, t = sample_far_field(N, device, dtype)
-    u1, u3, phi = net(x1, x3, t)
-    return u1, u3, phi
+# def bc_far_field(
+#     net,
+#     N: int,
+#     device: torch.device,
+#     dtype: torch.dtype,
+# ) -> tuple[Tensor, Tensor, Tensor]:
+#     """Far-field condition: u₁, u₃, φ → 0  as  x₁ → L."""
+#     x1, x3, t = sample_far_field(N, device, dtype)
+#     u1, u3, phi = net(x1, x3, t)
+#     return u1, u3, phi

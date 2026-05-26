@@ -40,21 +40,24 @@ SIGMA_33_0: float = 2.0e8
 
 # ── Geometry ─────────────────────────────────────────────────────────────────
 H: float = 4.0              # strip height [m]
-A_CRACK: float = 1.0        # lower crack-tip position  x₃ = a  [m]
-B_CRACK: float = 3.0        # upper crack-tip position  x₃ = b  [m]
-L_TRUNC: float = 10.0       # semi-infinite domain truncated at x₁ = L [m]
+A_CRACK: float = 0.3        # lower crack-tip position  x₃ = a  [m]
+B_CRACK: float = 0.4        # upper crack-tip position  x₃ = b  [m]
+L_TRUNC: float = 30.0       # semi-infinite domain truncated at x₁ = L [m]
 
 # ── Fractional heat model ─────────────────────────────────────────────────────
 TAU_Q: float = 0.4          # thermal phase-lag [s]
 GAMMA: float = 0.8          # Caputo order  0 < γ ≤ 1  (γ = 1 → classical CV)
-T0_BC: float = 1.0          # Heaviside step amplitude  T(0,t) = T0 H(t)  [K]
-T_MAX: float = 2.0          # simulation end time [s]
+T0_BC: float = 15.0          # Heaviside step amplitude  T(0,t) = T0 H(t)  [K]
+T_MAX: float = 40.0          # simulation end time [s]
 
 # ── Applied loading ──────────────────────────────────────────────────────────
-TAU_0_CONST: float = 1.0e6  # uniform part of crack-face stress τ₀ [N m⁻²]
+# Reference thermal traction used to scale displacement outputs.
+# Set to a realistic stress magnitude (N m⁻²) so network output scales are reasonable.
+TAU_0_CONST: float = 1e6
+
 
 # ── Derived thermal diffusivity ──────────────────────────────────────────────
-LAMBDA_0: float = K_3 / (RHO * C_RHO)   # effective diffusivity [m² s⁻¹]
+LAMBDA_0: float =0.9   # effective diffusivity [m² s⁻¹]
 
 # ── Effective moduli (Eqs. μ_E0, k_E0) ───────────────────────────────────────
 _DENOM: float = MU_33 * EPS_33 + E_33 ** 2
@@ -80,20 +83,20 @@ N_IC: int = 500             # initial-condition points (t = 0)
 
 # Network architecture  [input_dim, hidden, ..., output_dim]
 # Mechanical PINN:  inputs (x1, x3, t) → outputs (u1, u3, φ)
-MECH_LAYERS: list[int] = [3, 128, 128, 128, 128, 3]
+MECH_LAYERS: list[int] = [3, 50, 50, 50, 50, 3]
 # Temperature PINN: inputs (x3, t)     → output  T
-TEMP_LAYERS: list[int] = [2, 64, 64, 64, 1]
+TEMP_LAYERS: list[int] = [2, 40, 40, 40, 1]
 
 # Training schedule
-LR_ADAM: float = 1e-3
-MAX_ITER_ADAM: int = 15_000
-MAX_ITER_LBFGS: int = 5_000
+LR_ADAM: float = 1e-4
+MAX_ITER_ADAM: int = 500
+MAX_ITER_LBFGS: int = 1_00
 
 # Loss weights
 W_PDE: float = 1.0
-W_BC: float = 10.0
-W_IC: float = 10.0
-W_FAR: float = 1.0          # far-field decay condition
+W_BC: float =5.0
+W_IC: float = 0.2
+W_FAR: float = 0.1          # far-field decay condition
 
 # ── Normalisation scales (for numerical stability) ───────────────────────────
 # Inputs scaled to [0, 1]:  x̄₁ = x₁/L_TRUNC, x̄₃ = x₃/H, t̄ = t/T_MAX

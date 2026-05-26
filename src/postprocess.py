@@ -57,9 +57,9 @@ def compute_sif(
     t_values: np.ndarray,
     device: torch.device,
     dtype: torch.dtype,
-    n_tip: int = 30,
-    delta_min: float = 1e-4,
-    delta_max: float = 0.05,
+    n_tip: int = 60,
+    delta_min: float = 1e-3,
+    delta_max: float = 0.01,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute K_Ia(t) and K_Ib(t) for each time in *t_values*.
 
@@ -88,13 +88,13 @@ def compute_sif(
         tau_a = _tau11_at_left_face(net, x3_a, t_val, device, dtype)
         f_a   = np.sqrt(2.0 * np.pi * deltas) * tau_a
         # Linear extrapolation to δ=0
-        K_Ia[i] = np.polyval(np.polyfit(deltas, f_a, 1), 0.0)
+        K_Ia[i] = np.polyval(np.polyfit(deltas, f_a, 2), 0.0)
 
         # Near tip b (approach from above: x₃ = b + δ)
         x3_b = b + deltas
         tau_b = _tau11_at_left_face(net, x3_b, t_val, device, dtype)
         f_b   = np.sqrt(2.0 * np.pi * deltas) * tau_b
-        K_Ib[i] = np.polyval(np.polyfit(deltas, f_b, 1), 0.0)
+        K_Ib[i] = np.polyval(np.polyfit(deltas, f_b, 2), 0.0)
 
     return K_Ia, K_Ib
 
@@ -112,12 +112,16 @@ def plot_temperature(
     """Contour plot of T^(1)(x₃, t)."""
     Path(save_dir).mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(7, 4))
-    TT, XX = np.meshgrid(t_grid, x3_grid)
-    cf = ax.contourf(TT, XX, T_field, levels=40, cmap="hot")
-    fig.colorbar(cf, ax=ax, label="T⁽¹⁾ (K)")
-    ax.set_xlabel("t (s)")
-    ax.set_ylabel("x₃ (m)")
-    ax.set_title("Fractional CV temperature field T⁽¹⁾(x₃, t)")
+    T_nd = T_field / cfg.T0_BC
+    H = cfg.H
+    F_grid = (cfg.LAMBDA_0 * t_grid)/(H**2)
+    TT, XX = np.meshgrid(F_grid, x3_grid)
+    cf = ax.contourf(TT, XX/H, T_nd, levels=40, cmap="hot")
+    fig.colorbar(cf, ax=ax, label="T⁽¹⁾ (K)/T_0")
+    ax.set_xlabel("Fourier Number F")
+    ax.set_ylabel("x₃/H")
+    ax.set_title(r"Normalized Temperature Field $T^{(1)}/T_0$"
+)
     fig.tight_layout()
     fig.savefig(Path(save_dir) / "temperature_field.png", dpi=150)
     plt.close(fig)
@@ -130,22 +134,65 @@ def plot_sif(
     K_Ib: np.ndarray,
     save_dir: str | Path = "figures",
 ) -> None:
-    """Plot K_Ia(t) and K_Ib(t)."""
+
     Path(save_dir).mkdir(parents=True, exist_ok=True)
-    fig, ax = plt.subplots(figsize=(7, 4))
-    ax.plot(t_values, K_Ia / 1e6, label=r"$K_{Ia}$ (MPa√m)", lw=2)
-    ax.plot(t_values, K_Ib / 1e6, label=r"$K_{Ib}$ (MPa√m)", lw=2, ls="--")
-    ax.set_xlabel("t (s)")
-    ax.set_ylabel("SIF (MPa·√m)")
-    ax.set_title("Stress Intensity Factors vs. Time")
-    ax.legend()
+
+    H = cfg.H
+    F_values = (cfg.LAMBDA_0 * t_values)/(H**2)
+
+    c = cfg.B_CRACK - cfg.A_CRACK
+    K_ref = cfg.KAPPA_33 * cfg.T0_BC * np.sqrt(np.pi * c)
+
+    K_Ia_nd = K_Ia / K_ref
+    K_Ib_nd = K_Ib / K_ref
+
+    # ---------------- K_Ia plot ----------------
+    fig, ax = plt.subplots(figsize=(7,4))
+
+    ax.plot(F_values, K_Ia_nd, lw=2)
+
+    ax.set_xlabel("Fourier Number F")
+    ax.set_ylabel(r"$K_{Ia}/(k_{33}T_0\sqrt{\pi c})$")
+    ax.set_title(r"Stress Intensity Factor $K_{Ia}$")
+
     ax.grid(True, alpha=0.3)
+
     fig.tight_layout()
-    fig.savefig(Path(save_dir) / "sif_vs_time.png", dpi=150)
+
+    fig.savefig(
+        Path(save_dir) / "K_Ia_vs_time.png",
+        dpi=150
+    )
+
     plt.close(fig)
-    print("Saved sif_vs_time.png")
+
+    print("Saved K_Ia_vs_time.png")
 
 
+    # ---------------- K_Ib plot ----------------
+    fig, ax = plt.subplots(figsize=(7,4))
+
+    ax.plot(F_values, K_Ib_nd, lw=2)
+
+    ax.set_xlabel("Fourier Number F")
+    ax.set_ylabel(r"$K_{Ib}/(k_{33}T_0\sqrt{\pi c})$")
+    ax.set_title(r"Stress Intensity Factor $K_{Ib}$")
+
+    ax.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+
+    fig.savefig(
+        Path(save_dir) / "K_Ib_vs_time.png",
+        dpi=150
+    )
+
+    plt.close(fig)
+
+    print("Saved K_Ib_vs_time.png")
+
+
+    
 def plot_loss_history(
     history: list[dict[str, float]],
     save_dir: str | Path = "figures",
@@ -222,3 +269,57 @@ def plot_displacement_field(
     fig.savefig(Path(save_dir) / fname, dpi=150)
     plt.close(fig)
     print(f"Saved {fname}")
+
+
+
+def plot_tau0_field(
+    x3_grid: np.ndarray,
+    t_grid: np.ndarray,
+    tau0_field: np.ndarray,
+    save_dir: str | Path = "figures",
+) -> None:
+    """Contour plot of τ₀(x₃,F)."""
+
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    # Non-dimensional thermal loading
+    tau0_nd = tau0_field / (cfg.KAPPA_11 * cfg.T0_BC)
+
+
+    H = cfg.H
+
+    # Fourier number
+    F_grid = (cfg.LAMBDA_0 * t_grid) / (H ** 2)
+
+    # Meshgrid
+    FF, XX = np.meshgrid(F_grid, x3_grid)
+
+    # Contour plot
+    cf = ax.contourf(
+        FF,
+        XX/H,
+        tau0_nd,
+        levels=50,
+        cmap="RdBu_r"
+    )
+
+    cbar = fig.colorbar(cf, ax=ax)
+    cbar.set_label(r"$\tau_0/(k_{11}T_0)$")
+
+    ax.set_xlabel("Fourier Number F")
+    ax.set_ylabel(r"$x_3/H$")
+    ax.set_title(
+    r"Normalized Thermal Loading $\tau_0/(k_{11}T_0)$"
+)
+
+    fig.tight_layout()
+
+    fig.savefig(
+        Path(save_dir) / "tau0_field.png",
+        dpi=150
+    )
+
+    plt.close(fig)
+
+    print("Saved tau0_field.png")
