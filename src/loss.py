@@ -11,6 +11,7 @@ All squared norms are mean-squared values.
 from __future__ import annotations
 
 import torch
+import numpy as np
 from torch import Tensor
 
 from . import config as cfg
@@ -57,10 +58,73 @@ def pinn_loss(
     components : dict with individual loss terms (for logging)
     """
     # ── Interior PDE points ──────────────────────────────────────────────────
-    x1_int = torch.rand(N_int, 1, device=device, dtype=dtype,
-                        requires_grad=True) * cfg.L_TRUNC
-    x3_int = torch.rand(N_int, 1, device=device, dtype=dtype,
-                        requires_grad=True) * cfg.H
+    # -------------------------------------------------
+    # Uniform interior points
+    # -------------------------------------------------
+    N_uniform = int(0.4 * N_int)
+
+    x1_uniform = torch.rand(
+        N_uniform, 1,
+        device=device,
+        dtype=dtype,
+        requires_grad=True,
+    ) * cfg.L_TRUNC
+
+    x3_uniform = torch.rand(
+        N_uniform, 1,
+        device=device,
+        dtype=dtype,
+        requires_grad=True,
+    ) * cfg.H
+
+    # -------------------------------------------------
+    # Crack-tip refinement points
+    # -------------------------------------------------
+    N_tip = N_int - N_uniform
+
+    r = 0.002 * torch.rand(
+        N_tip, 1,
+        device=device,
+        dtype=dtype,
+    )
+
+    theta = np.pi * torch.rand(
+        N_tip, 1,
+        device=device,
+        dtype=dtype,
+    )
+
+    half = N_tip // 2
+
+    # ---- lower crack tip
+    x1_a = r[:half] * torch.cos(theta[:half])
+
+    x3_a = (
+        cfg.A_CRACK
+        + r[:half] * torch.sin(theta[:half])
+    )
+
+    # ---- upper crack tip
+    x1_b = r[half:] * torch.cos(theta[half:])
+
+    x3_b = (
+        cfg.B_CRACK
+        + r[half:] * torch.sin(theta[half:])
+    )
+
+    # Combine refined points
+    x1_tip = torch.cat([x1_a, x1_b], dim=0)
+    x3_tip = torch.cat([x3_a, x3_b], dim=0)
+
+    x1_tip.requires_grad_(True)
+    x3_tip.requires_grad_(True)
+
+    # -------------------------------------------------
+    # Final collocation points
+    # -------------------------------------------------
+    x1_int = torch.cat([x1_uniform, x1_tip], dim=0)
+
+    x3_int = torch.cat([x3_uniform, x3_tip], dim=0)
     t_int = torch.rand(
     N_int, 1,
     device=device,

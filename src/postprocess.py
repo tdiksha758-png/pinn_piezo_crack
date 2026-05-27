@@ -323,3 +323,55 @@ def plot_tau0_field(
     plt.close(fig)
 
     print("Saved tau0_field.png")
+
+def plot_tau11_near_tip(
+    net,
+    t_val,
+    device,
+    dtype,
+    tip="a",
+    n_points=200,
+    delta_min=1e-4,
+    delta_max=0.05,
+    save_dir="figures",
+):
+    import matplotlib.pyplot as plt
+    from pathlib import Path
+
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+
+    if tip == "a":
+        x3_vals = cfg.A_CRACK - np.linspace(delta_min, delta_max, n_points)
+        r_vals = cfg.A_CRACK - x3_vals
+    else:
+        x3_vals = cfg.B_CRACK + np.linspace(delta_min, delta_max, n_points)
+        r_vals = x3_vals - cfg.B_CRACK
+
+    tau11 = _tau11_at_left_face(
+        net,
+        x3_vals,
+        t_val,
+        device,
+        dtype,
+    )
+
+    fig, ax = plt.subplots(figsize=(6,4))
+
+    ax.plot(r_vals, tau11, lw=2)
+
+    ax.set_xlabel("Distance from crack tip r")
+    ax.set_ylabel(r"$\tau_{11}$")
+    ax.set_title(f"Near-tip stress field at tip {tip}")
+
+    ax.grid(True)
+
+    fig.tight_layout()
+
+    fig.savefig(
+        Path(save_dir) / f"tau11_tip_{tip}.png",
+        dpi=150,
+    )
+
+    plt.close(fig)
+
+    print(f"Saved tau11_tip_{tip}.png")

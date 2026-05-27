@@ -94,7 +94,7 @@ MAX_ITER_LBFGS: int = 1_00
 
 # Loss weights
 W_PDE: float = 1.0
-W_BC: float =5.0
+W_BC: float =10.0
 W_IC: float = 0.2
 W_FAR: float = 0.1          # far-field decay condition
 
