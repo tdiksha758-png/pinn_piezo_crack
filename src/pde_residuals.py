@@ -1,32 +1,3 @@
-"""PDE residuals for the three governing equations of a pre-stressed
-piezoelectric half-plane (PZT-4).
-
-Governing equations (quasi-static, no body forces):
-
-  Eq 1 (u₁):
-    (μ₁₁+σ₁₁⁰) u₁,₁₁  +  (μ₄₄+σ₃₃⁰) u₁,₃₃
-    + (μ₁₃+μ₄₄) u₃,₁₃  + (e₃₁+e₁₅) φ,₁₃  = 0
-
-  Eq 2 (u₃):
-    (μ₄₄+σ₁₁⁰) u₃,₁₁  +  (μ₃₃+σ₃₃⁰) u₃,₃₃
-    + (μ₁₃+μ₄₄) u₁,₁₃  + e₁₅ φ,₁₁  + e₃₃ φ,₃₃  = 0
-
-  Eq 3 (φ):
-    e₁₅ u₃,₁₁  + e₃₃ u₃,₃₃  + (e₁₅+e₃₁) u₁,₁₃
-    − ε₁₁ φ,₁₁  − ε₃₃ φ,₃₃  = 0
-
-Comma-subscript denotes partial differentiation.
-All second derivatives are computed via PyTorch autograd.
-
-Constitutive relations (for BC computation):
-
-    τ₁₁ = μ₁₁ u₁,₁  +  μ₁₃ u₃,₃  +  e₃₁ φ,₃
-    τ₃₃ = μ₁₃ u₁,₁  +  μ₃₃ u₃,₃  +  e₃₃ φ,₃
-    τ₁₃ = μ₄₄ (u₁,₃ + u₃,₁)  +  e₁₅ φ,₁
-    D₁  = e₁₅ (u₁,₃ + u₃,₁)  −  ε₁₁ φ,₁
-    D₃  = e₃₁ u₁,₁  +  e₃₃ u₃,₃  −  ε₃₃ φ,₃
-"""
-
 from __future__ import annotations
 
 import torch
@@ -34,139 +5,213 @@ from torch import Tensor
 
 from . import config as cfg
 
-# ── Convenience: scalar autograd helper ──────────────────────────────────────
 
-def _grad(output: Tensor, inp: Tensor, create_graph: bool = True) -> Tensor:
-    """∂output/∂inp  (element-wise, same shape as output/inp)."""
+# ============================================================
+# AUTOGRAD HELPER
+# ============================================================
+
+def _grad(output: Tensor, inp: Tensor, create_graph=True):
     return torch.autograd.grad(
-        output, inp,
+        output,
+        inp,
         grad_outputs=torch.ones_like(output),
         create_graph=create_graph,
         retain_graph=True,
     )[0]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# First-order derivatives of (u₁, u₃, φ)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def first_order_derivatives(
-    u1: Tensor, u3: Tensor, phi: Tensor,
-    x1: Tensor, x3: Tensor,
-) -> dict[str, Tensor]:
-    """Return all first-order partial derivatives needed for constitutive laws.
-
-    Parameters
-    ----------
-    u1, u3, phi : network outputs  (N, 1)
-    x1, x3      : input coordinates with requires_grad=True  (N, 1)
-    """
-    u1_x1 = _grad(u1, x1)
-    u1_x3 = _grad(u1, x3)
-    u3_x1 = _grad(u3, x1)
-    u3_x3 = _grad(u3, x3)
-    phi_x1 = _grad(phi, x1)
-    phi_x3 = _grad(phi, x3)
-    return {
-        "u1_x1": u1_x1, "u1_x3": u1_x3,
-        "u3_x1": u3_x1, "u3_x3": u3_x3,
-        "phi_x1": phi_x1, "phi_x3": phi_x3,
-    }
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Constitutive relations  (τ, D)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def constitutive(d: dict[str, Tensor]) -> dict[str, Tensor]:
-    """Evaluate stress and electric displacement from first-order derivatives.
-
-    Parameters
-    ----------
-    d : output of :func:`first_order_derivatives`
-    """
-    mu11  = cfg.MU_11;  mu13  = cfg.MU_13;  mu33  = cfg.MU_33
-    mu44  = cfg.MU_44
-    e31   = cfg.E_31;   e33   = cfg.E_33;   e15   = cfg.E_15
-    eps11 = cfg.EPS_11; eps33 = cfg.EPS_33
-
-    tau11 = mu11 * d["u1_x1"] + mu13 * d["u3_x3"] + e31 * d["phi_x3"]
-    tau33 = mu13 * d["u1_x1"] + mu33 * d["u3_x3"] + e33 * d["phi_x3"]
-    tau13 = mu44 * (d["u1_x3"] + d["u3_x1"]) + e15 * d["phi_x1"]
-    D1    = e15  * (d["u1_x3"] + d["u3_x1"]) - eps11 * d["phi_x1"]
-    D3    = e31  * d["u1_x1"] + e33 * d["u3_x3"] - eps33 * d["phi_x3"]
-
-    return {"tau11": tau11, "tau33": tau33, "tau13": tau13, "D1": D1, "D3": D3}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PDE residuals
-# ─────────────────────────────────────────────────────────────────────────────
+# ============================================================
+# PDE RESIDUALS
+# ============================================================
 
 def pde_residuals(
-    u1: Tensor, u3: Tensor, phi: Tensor,
-    x1: Tensor, x3: Tensor,
-) -> tuple[Tensor, Tensor, Tensor]:
-    """Compute residuals of all three governing equations.
-
-    Parameters
-    ----------
-    u1, u3, phi : network predictions at interior collocation points (N, 1)
-    x1, x3      : collocation coordinates  (N, 1), requires_grad=True
-
-    Returns
-    -------
-    R1, R2, R3 : residuals of Eq 1, Eq 2, Eq 3  — each (N, 1)
+    u1: Tensor,
+    u2: Tensor,
+    u3: Tensor,
+    phi: Tensor,
+    x1: Tensor,
+    x3: Tensor,
+    t: Tensor,
+):
     """
-    mu11  = cfg.MU_11;  mu13  = cfg.MU_13;  mu33  = cfg.MU_33
-    mu44  = cfg.MU_44
-    e31   = cfg.E_31;   e33   = cfg.E_33;   e15   = cfg.E_15
-    eps11 = cfg.EPS_11; eps33 = cfg.EPS_33
-    s11   = cfg.SIGMA_11_0; s33 = cfg.SIGMA_33_0
+    Returns:
+        R1 : u1 equation
+        R2 : u2 equation
+        R3 : u3 equation
+        R4 : electric potential equation
+    """
 
-    # ── first derivatives ────────────────────────────────────────────────────
-    u1_x1  = _grad(u1,  x1)
-    u1_x3  = _grad(u1,  x3)
-    u3_x1  = _grad(u3,  x1)
-    u3_x3  = _grad(u3,  x3)
+    # --------------------------------------------------------
+    # First derivatives
+    # --------------------------------------------------------
+
+    u1_x1 = _grad(u1, x1)
+    u1_x3 = _grad(u1, x3)
+
+    u2_x1 = _grad(u2, x1)
+    u2_x3 = _grad(u2, x3)
+
+    u3_x1 = _grad(u3, x1)
+    u3_x3 = _grad(u3, x3)
+
     phi_x1 = _grad(phi, x1)
     phi_x3 = _grad(phi, x3)
 
-    # ── second derivatives ────────────────────────────────────────────────────
-    u1_x1x1   = _grad(u1_x1,  x1)
-    u1_x3x3   = _grad(u1_x3,  x3)
-    u1_x1x3   = _grad(u1_x1,  x3)   # = ∂²u₁/∂x₁∂x₃
-    u3_x1x1   = _grad(u3_x1,  x1)
-    u3_x3x3   = _grad(u3_x3,  x3)
-    u3_x1x3   = _grad(u3_x1,  x3)   # = ∂²u₃/∂x₁∂x₃
-    phi_x1x1  = _grad(phi_x1, x1)
-    phi_x3x3  = _grad(phi_x3, x3)
-    phi_x1x3  = _grad(phi_x1, x3)   # = ∂²φ/∂x₁∂x₃
+    u1_t = _grad(u1, t)
+    u2_t = _grad(u2, t)
+    u3_t = _grad(u3, t)
 
-    # ── Eq 1 residual ─────────────────────────────────────────────────────────
+    # --------------------------------------------------------
+    # Second derivatives
+    # --------------------------------------------------------
+
+    u1_x1x1 = _grad(u1_x1, x1)
+    u1_x1x3 = _grad(u1_x1, x3)
+    u1_x3x3 = _grad(u1_x3, x3)
+
+    u2_x1x1 = _grad(u2_x1, x1)
+    u2_x1x3 = _grad(u2_x1, x3)
+    u2_x3x3 = _grad(u2_x3, x3)
+
+    u3_x1x1 = _grad(u3_x1, x1)
+    u3_x1x3 = _grad(u3_x1, x3)
+    u3_x3x3 = _grad(u3_x3, x3)
+
+    phi_x1x1 = _grad(phi_x1, x1)
+    phi_x1x3 = _grad(phi_x1, x3)
+    phi_x3x3 = _grad(phi_x3, x3)
+
+    u1_tt = _grad(u1_t, t)
+    u2_tt = _grad(u2_t, t)
+    u3_tt = _grad(u3_t, t)
+
+    # --------------------------------------------------------
+    # Material constants
+    # --------------------------------------------------------
+
+    C11 = cfg.C11
+    C13 = cfg.C13
+    C14 = cfg.C14
+    C15 = cfg.C15
+    C16 = cfg.C16
+
+    C31 = cfg.C31
+    C33 = cfg.C33
+    C34 = cfg.C34
+    C35 = cfg.C35
+    C36 = cfg.C36
+
+    C41 = cfg.C41
+    C43 = cfg.C43
+    C44 = cfg.C44
+    C45 = cfg.C45
+    C46 = cfg.C46
+
+    C53 = cfg.C53
+    C54 = cfg.C54
+    C55 = cfg.C55
+    C56 = cfg.C56
+
+    C63 = cfg.C63
+    C65 = cfg.C65
+    C66 = cfg.C66
+
+    P11 = cfg.P11
+    P33 = cfg.P33
+
+    e11 = cfg.E11
+    e13 = cfg.E13
+    e14 = cfg.E14
+    e15 = cfg.E15
+    e16 = cfg.E16
+
+    e31 = cfg.E31
+    e33 = cfg.E33
+    e34 = cfg.E34
+    e35 = cfg.E35
+    e36 = cfg.E36
+
+    eps11 = cfg.EPS11
+    eps33 = cfg.EPS33
+
+    rho = cfg.RHO
+
+    # ========================================================
+    # Eq (8)
+    # ========================================================
+
     R1 = (
-        (mu11 + s11) * u1_x1x1
-        + (mu44 + s33) * u1_x3x3
-        + (mu13 + mu44) * u3_x1x3
+        (C11 + P11) * u1_x1x1
+        + 2.0 * C15 * u1_x1x3
+        + (C55 + P33) * u1_x3x3
+        + C16 * u2_x1x1
+        + (C14 + C56) * u2_x1x3
+        + C54 * u2_x3x3
+        + C15 * u3_x1x1
+        + (C13 + C55) * u3_x1x3
+        + C53 * u3_x3x3
+        + e11 * phi_x1x1
         + (e31 + e15) * phi_x1x3
+        + e35 * phi_x3x3
+        - rho * u1_tt
     )
 
-    # ── Eq 2 residual ─────────────────────────────────────────────────────────
+    # ========================================================
+    # Eq (9)
+    # ========================================================
+
     R2 = (
-        (mu44 + s11) * u3_x1x1
-        + (mu33 + s33) * u3_x3x3
-        + (mu13 + mu44) * u1_x1x3
-        + e15 * phi_x1x1
-        + e33 * phi_x3x3
+        C16 * u1_x1x1
+        + (C56 + C41) * u1_x1x3
+        + C45 * u1_x3x3
+        + (C66 + P11) * u2_x1x1
+        + 2.0 * C46 * u2_x1x3
+        + (C44 + P33) * u2_x3x3
+        + C65 * u3_x1x1
+        + (C63 + C45) * u3_x1x3
+        + C43 * u3_x3x3
+        + e16 * phi_x1x1
+        + (e36 + e14) * phi_x1x3
+        + e34 * phi_x3x3
+        - rho * u2_tt
     )
 
-    # ── Eq 3 residual ─────────────────────────────────────────────────────────
+    # ========================================================
+    # Eq (10)
+    # ========================================================
+
     R3 = (
-        e15  * u3_x1x1
-        + e33  * u3_x3x3
+        C15 * u1_x1x1
+        + (C55 + C31) * u1_x1x3
+        + C35 * u1_x3x3
+        + C56 * u2_x1x1
+        + (C54 + C36) * u2_x1x3
+        + C34 * u2_x3x3
+        + (C55 + P11) * u3_x1x1
+        + 2.0 * C53 * u3_x1x3
+        + (C33 + P33) * u3_x3x3
+        + e15 * phi_x1x1
+        + (e35 + e31) * phi_x1x3
+        + e33 * phi_x3x3
+        - rho * u3_tt
+    )
+
+    # ========================================================
+    # Eq (11)
+    # ========================================================
+
+    R4 = (
+        e11 * u1_x1x1
         + (e15 + e31) * u1_x1x3
+        + e35 * u1_x3x3
+        + e16 * u2_x1x1
+        + (e14 + e36) * u2_x1x3
+        + e34 * u2_x3x3
+        + e15 * u3_x1x1
+        + (e13 + e35) * u3_x1x3
+        + e33 * u3_x3x3
         - eps11 * phi_x1x1
         - eps33 * phi_x3x3
     )
 
-    return R1, R2, R3
+    return R1, R2, R3, R4

@@ -1,103 +1,173 @@
-"""Material constants (PZT-4) and simulation parameters.
+# ==========================================================
+# MATERIAL PROPERTIES
+# ==========================================================
 
-All quantities in SI units unless noted.
-References: Table 1 in the problem statement.
-"""
+C11 = 2.385e11
+C12 = 0.768e11
+C13 = 0.633e11
+C14 = 0.060e11
+C15 = 0.028e11
+C16 = 0.005e11
 
-from math import gamma as math_gamma
+C22 = 2.412e11
+C23 = 0.637e11
+C24 = -0.027e11
+C25 = -0.010e11
+C26 = -0.002e11
 
-# ── Elastic stiffness (N m⁻²) ────────────────────────────────────────────────
-MU_11: float = 139.0e9
-MU_13: float = 74.3e9
-MU_33: float = 113.0e9
-MU_44: float = 25.6e9
+C31 = 0.633e11
 
-# ── Piezoelectric constants (C m⁻²) ─────────────────────────────────────────
-E_31: float = -6.98
-E_33: float = 13.84
-E_15: float = -13.44
+C33 = 2.177e11
+C34 = 0.027e11
+C35 = -0.019e11
+C36 = -0.003e11
 
-# ── Dielectric permittivities (C V⁻¹ m⁻¹) ──────────────────────────────────
-EPS_11: float = 60.0e-10
-EPS_33: float = 54.7e-10
+C41 = 0.060e11
+C43 = 0.027e11
+C44 = 0.860e11
+C45 = 0.057e11
+C46 = 0.055e11
 
-# ── Thermo-elastic coupling (N K⁻¹ m⁻²) ─────────────────────────────────────
-KAPPA_11: float = 0.973e6
-KAPPA_33: float = 0.791e6
+C53 = -0.019e11
+C54 = 0.057e11
+C55 = 0.843e11
+C56 = 0.053e11
 
-# ── Pyroelectric coefficient (C K⁻¹ m⁻²) ───────────────────────────────────
-P_Z: float = -48.86e-6
+C63 = -0.003e11
+C65 = 0.053e11
+C66 = 0.764e11
 
-# ── Thermal / mechanical properties ─────────────────────────────────────────
-RHO: float = 7.5e3          # density [kg m⁻³]
-K_1: float = 0.52           # thermal conductivity, x₁-direction [W K⁻¹ m⁻¹]
-K_3: float = 0.12           # thermal conductivity, x₃-direction [W K⁻¹ m⁻¹]
-C_RHO: float = 420.0        # specific heat capacity [J kg⁻¹ K⁻¹]
 
-# ── Initial / pre-stresses (N m⁻²) ──────────────────────────────────────────
-SIGMA_11_0: float = 2.0e8
-SIGMA_33_0: float = 2.0e8
+# ==========================================================
+# PIEZOELECTRIC CONSTANTS
+# ==========================================================
 
-# ── Geometry ─────────────────────────────────────────────────────────────────
-H: float = 4.0              # strip height [m]
-A_CRACK: float = 1.0        # lower crack-tip position  x₃ = a  [m]
-B_CRACK: float = 3.0        # upper crack-tip position  x₃ = b  [m]
-L_TRUNC: float = 10.0       # semi-infinite domain truncated at x₁ = L [m]
+E11 = -0.614
+E12 = 0.117
+E13 = 0.122
+E14 = -0.053
+E15 = -0.727
+E16 = -1.252
 
-# ── Fractional heat model ─────────────────────────────────────────────────────
-TAU_Q: float = 0.4          # thermal phase-lag [s]
-GAMMA: float = 0.8          # Caputo order  0 < γ ≤ 1  (γ = 1 → classical CV)
-T0_BC: float = 1.0          # Heaviside step amplitude  T(0,t) = T0 H(t)  [K]
-T_MAX: float = 2.0          # simulation end time [s]
+E21 = -0.100
+E22 = -0.906
+E23 = 0.044
+E24 = -1.433
+E25 = -0.094
+E26 = 1.908
 
-# ── Applied loading ──────────────────────────────────────────────────────────
-TAU_0_CONST: float = 1.0e6  # uniform part of crack-face stress τ₀ [N m⁻²]
+E31 = -0.811
+E32 = -1.202
+E33 = 2.043
+E34 = -1.274
+E35 = 2.046
+E36 = 0.045
 
-# ── Derived thermal diffusivity ──────────────────────────────────────────────
-LAMBDA_0: float = K_3 / (RHO * C_RHO)   # effective diffusivity [m² s⁻¹]
 
-# ── Effective moduli (Eqs. μ_E0, k_E0) ───────────────────────────────────────
-_DENOM: float = MU_33 * EPS_33 + E_33 ** 2
+# ==========================================================
+# DIELECTRIC CONSTANTS
+# ==========================================================
 
-MU_E0: float = MU_11 - (
-    MU_13 * (MU_13 * EPS_33 + E_31 * E_33)
-    + E_31 * (MU_13 * E_33 - MU_33 * E_31)
-) / _DENOM
+EPS11 = 31.753e-11
+EPS12 = -0.089e-11
+EPS13 = 1.780e-11
 
-K_E0: float = KAPPA_11 - (
-    KAPPA_33 * (MU_13 * EPS_33 + E_31 * E_33)
-    - P_Z * (MU_13 * E_33 - MU_33 * E_31)
-) / _DENOM
+EPS22 = -2.123e-11
+EPS23 = -2.123e-11
 
-# Coefficient for fractional term in heat equation: C_γ = τq^γ / Γ(1+γ)
-C_GAMMA: float = (TAU_Q ** GAMMA) / math_gamma(1.0 + GAMMA)
+EPS33 = 43.846e-11
 
-# ── PINN hyper-parameters ─────────────────────────────────────────────────────
-# Collocation points
-N_INTERIOR: int = 8_000     # interior (PDE) collocation points
-N_BOUNDARY: int = 1_500     # points per boundary segment
-N_IC: int = 500             # initial-condition points (t = 0)
 
-# Network architecture  [input_dim, hidden, ..., output_dim]
-# Mechanical PINN:  inputs (x1, x3, t) → outputs (u1, u3, φ)
-MECH_LAYERS: list[int] = [3, 128, 128, 128, 128, 3]
-# Temperature PINN: inputs (x3, t)     → output  T
-TEMP_LAYERS: list[int] = [2, 64, 64, 64, 1]
+# ==========================================================
+# DENSITY
+# ==========================================================
 
-# Training schedule
-LR_ADAM: float = 1e-3
-MAX_ITER_ADAM: int = 15_000
-MAX_ITER_LBFGS: int = 5_000
+RHO = 6075.0
 
-# Loss weights
-W_PDE: float = 1.0
-W_BC: float = 10.0
-W_IC: float = 10.0
-W_FAR: float = 1.0          # far-field decay condition
 
-# ── Normalisation scales (for numerical stability) ───────────────────────────
-# Inputs scaled to [0, 1]:  x̄₁ = x₁/L_TRUNC, x̄₃ = x₃/H, t̄ = t/T_MAX
-# Output reference scales
-U_REF: float = H * TAU_0_CONST / MU_11       # displacement scale  [m]
-PHI_REF: float = abs(E_15) * U_REF / EPS_11 / H   # electric potential  [V]
-T_REF: float = T0_BC                          # temperature scale   [K]
+# ==========================================================
+# INITIAL STRESSES
+# ==========================================================
+
+P11 = 1.0e9
+P33 = 1.0e9
+
+
+# ==========================================================
+# DOMAIN
+# ==========================================================
+
+X1_MIN = 0.0
+X1_MAX = 1.0
+
+# Lower layer : -1 <= x3 <= 0
+# Upper layer :  0 <= x3 <= 1
+
+X3_MIN = -1.0
+X3_MAX = 1.0
+
+INTERFACE_Z = 0.0
+
+
+# ==========================================================
+# TIME DOMAIN
+# ==========================================================
+
+T_MIN = 0.0
+T_MAX = 1.0
+
+
+# ==========================================================
+# NORMALIZATION CONSTANTS
+# ==========================================================
+
+U_REF = 1.0
+PHI_REF = 1.0
+
+
+# ==========================================================
+# PINN ARCHITECTURE
+# ==========================================================
+
+MECH_LAYERS = [
+    3,      # (x1, x3, t)
+    64,
+    64,
+    64,
+    64,
+    64,
+    4       # (u1, u2, u3, phi)
+]
+
+
+# ==========================================================
+# TRAINING PARAMETERS
+# ==========================================================
+
+N_INT = 1000
+
+N_BC = 300
+
+N_INTERFACE = 300
+
+LR = 1e-3
+
+N_ITER = 10
+
+
+# ==========================================================
+# LOSS WEIGHTS
+# ==========================================================
+
+W_PDE = 1.0
+
+W_INTERFACE = 1.0
+
+W_BC = 1.0
+
+
+# ==========================================================
+# DEFAULT TORCH SETTINGS
+# ==========================================================
+
+DTYPE = "float64"
